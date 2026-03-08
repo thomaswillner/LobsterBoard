@@ -164,24 +164,51 @@ function onSystemStats(callback) {
 // ─────────────────────────────────────────────
 // Remote server polling for system stats
 // ─────────────────────────────────────────────
-const _remotePollers = {}; // serverId -> { interval, callbacks }
+const _remotePollers = {}; // serverId -> { interval, callbacks, lastData, errors, lastSuccess }
 
 function onRemoteStats(serverId, callback, refreshMs = 10000) {
   if (!_remotePollers[serverId]) {
-    _remotePollers[serverId] = { callbacks: [], interval: null, lastData: null };
+    _remotePollers[serverId] = { 
+      callbacks: [], 
+      interval: null, 
+      lastData: null,
+      errors: 0,
+      lastSuccess: null,
+      offline: false
+    };
     
     const poll = async () => {
+      const poller = _remotePollers[serverId];
       try {
-        const res = await fetch(`/api/servers/${serverId}/stats`);
+        const res = await fetch(`/api/servers/${serverId}/stats`, {
+          signal: AbortSignal.timeout(10000) // 10s timeout
+        });
         if (res.ok) {
           const data = await res.json();
-          // Normalize remote data to match local SSE format
           const normalized = _normalizeRemoteStats(data);
-          _remotePollers[serverId].lastData = normalized;
-          _remotePollers[serverId].callbacks.forEach(cb => cb(normalized));
+          poller.lastData = normalized;
+          poller.errors = 0;
+          poller.lastSuccess = Date.now();
+          poller.offline = false;
+          poller.callbacks.forEach(cb => cb(normalized));
+        } else {
+          throw new Error(`HTTP ${res.status}`);
         }
       } catch (e) {
-        console.warn(`Remote stats error (${serverId}):`, e.message);
+        poller.errors++;
+        console.warn(`Remote stats error (${serverId}, attempt ${poller.errors}):`, e.message);
+        
+        // After 3 consecutive failures, mark as offline and notify widgets
+        if (poller.errors >= 3 && !poller.offline) {
+          poller.offline = true;
+          const offlineData = {
+            _offline: true,
+            _error: e.message,
+            _lastSuccess: poller.lastSuccess,
+            _serverId: serverId
+          };
+          poller.callbacks.forEach(cb => cb(offlineData));
+        }
       }
     };
     
@@ -2261,6 +2288,14 @@ const WIDGETS = {
     generateJs: (props) => `
       // Disk Usage Widget: ${props.id} — ${props.server === 'local' ? 'local SSE' : 'remote: ' + props.server}
       onStats('${props.server || 'local'}', function(data) {
+        // Handle offline state
+        if (data._offline) {
+          document.getElementById('${props.id}-pct').textContent = '⚠️';
+          document.getElementById('${props.id}-size').textContent = 'offline';
+          document.getElementById('${props.id}-ring').style.strokeDashoffset = 125.66;
+          return;
+        }
+        
         // Handle both local (array) and remote (object) disk data
         let d;
         if (Array.isArray(data.disk)) {
@@ -2314,8 +2349,17 @@ const WIDGETS = {
     generateJs: (props) => `
       // Uptime Monitor Widget: ${props.id} — ${props.server === 'local' ? 'local SSE' : 'remote: ' + props.server}
       onStats('${props.server || 'local'}', function(data) {
-        if (data.uptime == null) return;
         const container = document.getElementById('${props.id}-services');
+        
+        // Handle offline state
+        if (data._offline) {
+          const lastSeen = data._lastSuccess ? new Date(data._lastSuccess).toLocaleTimeString() : 'never';
+          container.innerHTML = '<div class="uptime-row" style="color:#f85149;justify-content:center;">⚠️ Connection lost</div>' +
+            '<div class="uptime-row" style="opacity:0.6;font-size:11px;justify-content:center;">Last: ' + lastSeen + '</div>';
+          return;
+        }
+        
+        if (data.uptime == null) return;
         const secs = data.uptime;
         const d = Math.floor(secs / 86400);
         const h = Math.floor((secs % 86400) / 3600);
@@ -2373,6 +2417,14 @@ const WIDGETS = {
       onStats('${props.server || 'local'}', function(data) {
         const list = document.getElementById('${props.id}-list');
         const badge = document.getElementById('${props.id}-badge');
+        
+        // Handle offline state
+        if (data._offline) {
+          list.innerHTML = '<div class="docker-row" style="color:#f85149;">⚠️ Connection lost</div>';
+          badge.textContent = '—';
+          return;
+        }
+        
         // Handle remote docker data structure
         const dockerData = data._remote && data.docker?.containers ? data.docker.containers : data.docker;
         if (!dockerData || dockerData.length === 0) {
@@ -2429,6 +2481,13 @@ const WIDGETS = {
         return (bytes / (1024 * 1024)).toFixed(1) + ' MB/s';
       }
       onStats('${props.server || 'local'}', function(data) {
+        // Handle offline state
+        if (data._offline) {
+          document.getElementById('${props.id}-down').textContent = '⚠️';
+          document.getElementById('${props.id}-up').textContent = 'offline';
+          return;
+        }
+        
         if (!data.network || data.network.length === 0) return;
         // Handle both local (array) and remote (object) formats
         let rx = 0, tx = 0;
