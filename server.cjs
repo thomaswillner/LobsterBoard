@@ -61,10 +61,12 @@ const HOST = process.env.HOST || '127.0.0.1';
 // ─────────────────────────────────────────────
 // Load from both package pages AND user's working directory pages (user overrides package)
 const CWD = process.cwd();
+// When run via npx/bin, LOBSTERBOARD_PKG_DIR tells us where the package is
+const PKG_DIR = process.env.LOBSTERBOARD_PKG_DIR || __dirname;
 const USER_PAGES_DIR = path.join(CWD, 'pages');
-const PKG_PAGES_DIR = path.join(__dirname, 'pages');
+const PKG_PAGES_DIR = path.join(PKG_DIR, 'pages');
 const PAGES_DIRS = [PKG_PAGES_DIR]; // Package pages first
-if (CWD !== __dirname && fs.existsSync(USER_PAGES_DIR)) {
+if (CWD !== PKG_DIR && fs.existsSync(USER_PAGES_DIR)) {
   PAGES_DIRS.push(USER_PAGES_DIR); // User pages override
 }
 // For backwards compat, PAGES_DIR points to first available (used for _shared)
