@@ -304,7 +304,7 @@ const WIDGETS = {
     name: 'Local Weather',
     icon: '🌡️',
     category: 'small',
-    description: 'Shows current weather for a single location using wttr.in (no API key needed).',
+    description: 'Shows current weather for a single location using Open-Meteo (no API key needed).',
     defaultWidth: 200,
     defaultHeight: 120,
     hasApiKey: false,
